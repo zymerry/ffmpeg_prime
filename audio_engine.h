@@ -28,14 +28,14 @@ public:
 		packet_(NULL) {}
 	~AudioCapture() {}
 public:
-	int		 audioInit(int channels, AVSampleFormat format, int sample_rate);
-	void audioDeinit();
-	void destoryFrame();
-	int  audioCloseDevice();
-	int      audioCaptureFrame(AVFrame **frame);
+	int		audioInit(int channels, AVSampleFormat format, int sample_rate);
+	void	audioDeinit();
+	void	destoryFrame();
+	int		audioCloseDevice();
+	int     audioCaptureFrame(AVFrame **frame);
 private:
-	int		 createFrame(int channel_layout, AVSampleFormat format, int nb_samples);
-	int		 audioOpenDevice();
+	int		createFrame(int channel_layout, AVSampleFormat format, int nb_samples);
+	int		audioOpenDevice();
 private:
 	string libName_;
 	string deviceName_;
@@ -116,4 +116,44 @@ private:
 	int channels_; 
 	int sampleRate_;
 };
+
+
+/*
+** @brief AudioDecode 音频编码类 输入packet 输出frame
+** first call audioDecodeInit() init Audio decode param and open decoder, then call audioDecode(), get a frame data.
+*/
+class AudioDecode
+{
+public:
+	AudioDecode(string decodername, int type)
+		:decoderName_(decodername), decode_type(type)
+	{}
+	~AudioDecode();
+	int AudioDecodeInit(AVSampleFormat decodeFormat, uint64_t decodeChLayout, int sampleRate, int bitRate, int profile);
+	int AudioDecodeDeinit();
+	int createInstream(string filename);
+	/* decode a packet */
+	int  audiodecode_();
+	int  audiodecode(AVFrame **dst_frame);
+	AVFrame* createFrame(uint64_t channel_layout, AVSampleFormat format, int nb_samples);
+
+private:
+	int createdecFrame(uint64_t channel_layout, AVSampleFormat format, int nb_samples);
+	void audio_set_decodec_ctx(AVSampleFormat encodeFormat, uint64_t encodeChLayout,
+		int samples, int bitRate, int profile);
+	string			 decoderName_;
+	AVCodecContext*  decodecCtx_;
+	AVFormatContext* fmtCtx_;
+	AVPacket         packet_;
+	AVFrame*         decframe_;
+
+	int             decode_type; //packet的来源 1-来自av_read_frame 0-自己组
+	FILE*           in_fd;
+	int				profile_;
+	uint64_t		channellayout_;
+	int				sampleRate_;
+	AVSampleFormat	decodeFormat_;
+	char error[128];
+};
+
 #endif

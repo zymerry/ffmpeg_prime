@@ -181,7 +181,21 @@ int AudioSample::audioSampleCreateData()
 
 int AudioSample::audioSampleConvert(AVFrame *srcFrame, AVFrame **dstFrame)
 {
-	memcpy((void *)srcData_[0], srcFrame->data[0], srcFrame->linesize[0]);
+	int planar = 0;
+	printf(" sdfsdf srcFrame->linesize[0]:%d\n", srcFrame->linesize[0]);
+	planar = av_sample_fmt_is_planar(srcFormat_);
+	if (planar)
+	{
+		int channels = av_get_channel_layout_nb_channels(srcChLayout_);
+		int plane_len = srcFrame->linesize[0] / channels; // 每层的数据长度
+		for (int i = 0; i < channels; i++) {               // 将每层数据写给源缓冲区
+			memcpy((void*)srcData_[i], srcFrame->data[i], plane_len);
+		}
+	}
+	else
+	{
+		memcpy((void*)srcData_[0], srcFrame->data[0], srcFrame->linesize[0]);
+	}
 	int nb_samples = swr_convert(swrCtx_, dstData_, 1024, (const uint8_t **)srcData_, 1024);
 	int dst_linesize = 0;
 	int dst_bufsize = av_samples_get_buffer_size(&dst_linesize, av_get_channel_layout_nb_channels(dstChLayout_),
@@ -191,10 +205,13 @@ int AudioSample::audioSampleConvert(AVFrame *srcFrame, AVFrame **dstFrame)
 	
 	createDstFrame(dstChLayout_, dstFormat_, nb_samples);
 	printf("convert create dst frame[0] size = %d\n", frame_->linesize[0]);
-	int planar = av_sample_fmt_is_planar(dstFormat_);
+	planar = av_sample_fmt_is_planar(dstFormat_);
 	if (planar) {
-		memcpy(frame_->data[0], dstData_[0], frame_->linesize[0]);
-		memcpy(frame_->data[1], dstData_[0] + frame_->linesize[0], frame_->linesize[0]);
+		int channels = av_get_channel_layout_nb_channels(srcChLayout_);
+		int plane_len = frame_->linesize[0] / channels; // 每层的数据长度
+		for (int i = 0; i < channels; i++) {               // 将每层数据写给源缓冲区
+			memcpy(frame_->data[i], dstData_[0]+ plane_len*i, plane_len);
+		}
 	} else {
 		memcpy(frame_->data[0], dstData_[0], frame_->linesize[0]);
 	}
@@ -253,7 +270,7 @@ int AudioEncode::audioEncode(AVFrame *frame, AVPacket **packet)
 		break;  //获取到一个packet
 	}
 	*packet = &packet_;
-	return 0;
+	return ret;
 }
 
 /* |- syncword(12) ...             | ID(v)(1)|    layer(2)  | protection_absent(1)|  (16bit)
@@ -271,12 +288,12 @@ void AudioEncode::packetAddHeader(char *aac_header, int frame_len)
 	//ID
 	aac_header[1] |= (0 << 3);    //ID : 0 for MPEG-4 ;  1 for MPEG-2  
 	//layer
-	aac_header[1] |= (0 << 1);    //Layer:0  always:00
+	aac_header[1] |= (0 << 1);    //Layer: always:00
 	//protection absent
-	aac_header[1] |= 1;           //protection absent:1    前两个字节的最低位为 1 
+	aac_header[1] |= 1;           //protection absent:1    set to 1 if there is no CRC and 0 if there is CRC
 	// also : aac_header[0] = 0xff; aac_header[1] = 0xf1;
 	//profile
-	aac_header[2] = (profile_) << 6;  //profile:profile  2bits
+	aac_header[2] = (profile_+1) << 6;  //profile:profile  2bits  和 MPEG-4 Audio Object Type = profile + 1
 	//sampling_frequency_index
 	aac_header[2] |= (sampling_frequency_index & 0x0f) << 2; //sampling_frequency_index 4bits 只有4bit要 &0x0f，清空高4位 
 	//private_bit
@@ -351,4 +368,204 @@ void AudioEncode::audio_set_encodec_ctx(AVSampleFormat encodeFormat, int encodeC
 }
 
 
+AudioDecode::~AudioDecode()
+{
+}
 
+int AudioDecode::AudioDecodeInit(AVSampleFormat decodeFormat, uint64_t decodeChLayout, 
+	int sampleRate, int bitRate, int profile)
+{
+	decodeFormat_ = decodeFormat;
+	sampleRate_ = sampleRate;
+	profile_ = profile;
+	channellayout_ = decodeChLayout;
+
+	AVCodec* codec = avcodec_find_decoder_by_name(decoderName_.c_str());
+	if (!codec) {
+		av_log(NULL, AV_LOG_ERROR, "audio not find encoder : %s\n", decoderName_.c_str());
+		return -1;
+	}
+	decodecCtx_ = avcodec_alloc_context3(codec);
+	if (!decodecCtx_) {
+		av_log(NULL, AV_LOG_ERROR, "avcodec alloc ctx failed.\n");
+		return -1;
+	}
+
+	audio_set_decodec_ctx(decodeFormat, decodeChLayout, sampleRate, bitRate, profile);
+
+	int ret = avcodec_open2(decodecCtx_, codec, NULL);
+	if (ret != 0) {
+		av_log(NULL, AV_LOG_ERROR, "avcodec open 2 failed.\n");
+		return -1;
+	}
+	av_init_packet(&packet_);
+	createdecFrame(decodeChLayout, decodeFormat, 1024);
+
+	return 0;
+}
+
+void AudioDecode::audio_set_decodec_ctx(AVSampleFormat encodeFormat, uint64_t encodeChLayout,
+	int sampleRate, int bitRate, int profile)
+{
+	decodecCtx_->sample_fmt = encodeFormat;
+	decodecCtx_->channel_layout = encodeChLayout;
+	decodecCtx_->sample_rate = sampleRate;
+	decodecCtx_->bit_rate = bitRate;
+	decodecCtx_->profile = profile;
+	decodecCtx_->channels = av_get_channel_layout_nb_channels(encodeChLayout);
+}
+
+AVFrame* AudioDecode::createFrame(uint64_t channel_layout, AVSampleFormat format, int nb_samples)
+{
+	AVFrame *frame = NULL;
+
+	frame = av_frame_alloc();
+	frame->channel_layout = channel_layout;
+	frame->format = format;
+	frame->nb_samples = nb_samples;
+	int ret = av_frame_get_buffer(frame, 0);
+	if (ret != 0) {
+		av_log(NULL, AV_LOG_ERROR, "open input failure.[%d][%s]\n", AVERROR(ret));
+		return NULL;
+	}
+	return frame;
+}
+
+int AudioDecode::createdecFrame(uint64_t channel_layout, AVSampleFormat format, int nb_samples)
+{
+	if (decframe_)
+		return 0;
+	decframe_ = av_frame_alloc();
+	decframe_->channel_layout = channel_layout;
+	decframe_->format = format;
+	decframe_->nb_samples = nb_samples;
+	printf("channel_layout:%d\n", channel_layout);
+	printf("format:%d\n", format);
+	printf("nb_samples:%d\n", nb_samples);
+	int ret = av_frame_get_buffer(decframe_, 0);
+	if (ret != 0) {
+		av_log(NULL, AV_LOG_ERROR, "open input failure.[%d][%s]\n", AVERROR(ret));
+		return -1;
+	}
+	return 0;
+}
+
+int AudioDecode::AudioDecodeDeinit()
+{
+	return 0;
+}
+
+int AudioDecode::createInstream(string filename)
+{
+	int ret = 0;
+	if (decode_type)
+	{
+		ret = avformat_open_input(&fmtCtx_, filename.c_str(), NULL, NULL);
+		if (ret != 0) {
+			av_strerror(ret, error, 128);
+			av_log(NULL, AV_LOG_ERROR, "open input failure.[ret][%s]\n", AVERROR(ret), error);
+			return -1;
+		}
+		av_dump_format(fmtCtx_, 0, filename.c_str(), 0);
+	}
+	else
+	{
+		printf("open file %s\n", filename.c_str());
+		in_fd = fopen(filename.c_str(), "rb+");
+		if (!in_fd)
+		{
+			av_log(NULL, AV_LOG_ERROR, "open input file %s error!\n", filename.c_str());
+		}
+	}
+	
+}
+
+int AudioDecode::audiodecode_()
+{
+	int ret = avcodec_send_packet(decodecCtx_, &packet_);
+	//ret >= 0说明数据设置成功了
+	while (ret >= 0) {
+		ret = avcodec_receive_frame(decodecCtx_, decframe_);
+		//要一直获取知道失败，因为可能会有好多帧需要吐出来，
+		if (ret < 0) {
+			//说明没有帧了，要继续送数据
+			if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+				break;
+			}
+			else {
+				return -1;//其他的值，说明真失败了。
+			}
+		}
+		break;  //获取到一个packet
+	}
+	return ret;
+}
+
+int get_aac_frame_len(UINT8* aac_header)
+{
+	int size = 0;
+
+	if (NULL == aac_header)
+	{
+		return -1;
+	}
+
+	size |= (aac_header[3] & 0b00000011) << 11; //0x03  前两个最高位，要移到高位（13 - 11 = 2） 
+	size |= aac_header[4] << 3;                //中间的8bit,要移到前两个高位后，13 - 2 = 11 - 8 = 3
+	size |= (aac_header[5] & 0b11100000) >> 5; //0xe0 最后的3Bit，要移到最后 
+	printf("size:%d\n", size);
+	return size;
+}
+
+int AudioDecode::audiodecode(AVFrame **dst_frame)
+{
+	int ret = 0;
+	
+	if (decode_type)
+	{
+		ret = av_read_frame(fmtCtx_, &packet_);
+		if (ret < 0)
+		{
+			av_log(NULL, AV_LOG_ERROR, "av_read_frame error over read file over!\n");
+			return ret;
+		}
+	}
+	else
+	{
+		UINT8 aac_data[2048] = { 0 };
+		int aac_frame_len = 0;
+		ret = fread(aac_data, 1, 7, in_fd); //读aac header 7个字节
+		if (ret <= 0)
+		{
+			perror("read:");
+			av_log(NULL, AV_LOG_ERROR, "read over ret : %d!\n", ret);
+			return ret;
+		}
+		aac_frame_len = get_aac_frame_len(aac_data);
+		printf("aac_frame_len:%d\n", aac_frame_len);
+		ret = fread(aac_data+7, 1, aac_frame_len - 7, in_fd);
+		if (ret <= 0)
+		{
+			av_log(NULL, AV_LOG_ERROR, "read over !\n");
+			return ret;
+		}
+		packet_.size = aac_frame_len;
+		packet_.data = (uint8_t*)av_malloc(packet_.size+1);
+		//memcpy(packet_.data, aac_data, aac_frame_len);
+		int ret = av_packet_from_data(&packet_, aac_data, packet_.size);
+		if (ret != 0)
+		{
+			av_log(NULL, AV_LOG_ERROR, "av_packet_from_data error!\n");
+			return ret;
+		}
+	}
+	printf("[%x][%x][%x][%x][%x][%x][%x]\n",
+		packet_.data[0], packet_.data[1], packet_.data[2], packet_.data[3], packet_.data[4], packet_.data[5], packet_.data[6]);
+	audiodecode_();
+	*dst_frame = decframe_;
+	//if (packet_.data)
+	//{
+	//	av_free(packet_.data);
+	//}
+	return ret;
+}
