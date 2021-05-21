@@ -155,7 +155,7 @@ int main() {
 	}
 	audioEncode->audioEncode(NULL, &packet); //结束之后要送一个空数据，让编码器吐出缓存的数据。
 }
-#endif
+#else
 
 //解码aac
 int main(int argc, char* argv[])
@@ -163,7 +163,8 @@ int main(int argc, char* argv[])
 	int ret = 0;
 	const char* out_file_name = "out_s16.pcm";
 	FILE* out_fd;
-	const string in_file_name = "out.aac";
+	const string in_file_name = "encode.aac";
+	//const string in_file_name = "out.aac";
 	AudioDecode* audio_decode = new AudioDecode("aac", 0);
 	AVFrame* decframe = NULL;
 	AVFrame* resample_frame = NULL;
@@ -192,17 +193,17 @@ int main(int argc, char* argv[])
 	{
 		//解码 aac->pcm-fltp
 		ret = audio_decode->audiodecode(&decframe);
-		if (ret <= 0)
+		if (ret <= 0) //AudioDecode-0 <=0 ; AudioDecode-1 <0
 		{
 			break;
 		}
-		//重采样 fltp->s16
+		//解码出来的数据是 FLTP 格式的，ffplay 不支持，需要重采样 
 		audioSample->audioSampleConvert(decframe, &resample_frame);
 
 		int planar = av_sample_fmt_is_planar(AV_SAMPLE_FMT_S16);
 		if (planar) {
-			fwrite(resample_frame->data[0], 1, resample_frame->linesize[0]/2, out_fd);
-			fwrite(resample_frame->data[1], 1, resample_frame->linesize[0]/2, out_fd);
+			fwrite(resample_frame->data[0], 1, resample_frame->linesize[0], out_fd);
+			fwrite(resample_frame->data[1], 1, resample_frame->linesize[0], out_fd);
 		}
 		else {
 			fwrite(resample_frame->data[0], 1, resample_frame->linesize[0], out_fd);
@@ -213,3 +214,4 @@ __FAIL:
 
 	return 0;
 }
+#endif

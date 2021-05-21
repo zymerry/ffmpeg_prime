@@ -189,7 +189,7 @@ int AudioSample::audioSampleConvert(AVFrame *srcFrame, AVFrame **dstFrame)
 		int channels = av_get_channel_layout_nb_channels(srcChLayout_);
 		int plane_len = srcFrame->linesize[0] / channels; // 每层的数据长度
 		for (int i = 0; i < channels; i++) {               // 将每层数据写给源缓冲区
-			memcpy((void*)srcData_[i], srcFrame->data[i], plane_len);
+			memcpy((void*)(srcData_[0] + plane_len*i), srcFrame->data[i], plane_len);
 		}
 	}
 	else
@@ -208,7 +208,8 @@ int AudioSample::audioSampleConvert(AVFrame *srcFrame, AVFrame **dstFrame)
 	planar = av_sample_fmt_is_planar(dstFormat_);
 	if (planar) {
 		int channels = av_get_channel_layout_nb_channels(srcChLayout_);
-		int plane_len = frame_->linesize[0] / channels; // 每层的数据长度
+		printf("*********** frame_->linesize[0]:%d***************\n", frame_->linesize[0]);
+		int plane_len = frame_->linesize[0]; // 每层的数据长度
 		for (int i = 0; i < channels; i++) {               // 将每层数据写给源缓冲区
 			memcpy(frame_->data[i], dstData_[0]+ plane_len*i, plane_len);
 		}
@@ -281,6 +282,7 @@ int AudioEncode::audioEncode(AVFrame *frame, AVPacket **packet)
 void AudioEncode::packetAddHeader(char *aac_header, int frame_len)
 {
 	int sampling_frequency_index = sampleIndex.at(sampleRate_);
+	printf("%d\n", sampling_frequency_index);
 	printf("add header sample rate :%d, index: %d\n", sampleRate_, sampling_frequency_index);
 	//sync word
 	aac_header[0] = 0xff;         //syncword:0xfff                          高8bits
@@ -404,15 +406,15 @@ int AudioDecode::AudioDecodeInit(AVSampleFormat decodeFormat, uint64_t decodeChL
 	return 0;
 }
 
-void AudioDecode::audio_set_decodec_ctx(AVSampleFormat encodeFormat, uint64_t encodeChLayout,
+void AudioDecode::audio_set_decodec_ctx(AVSampleFormat decodeFormat, uint64_t decodeChLayout,
 	int sampleRate, int bitRate, int profile)
 {
-	decodecCtx_->sample_fmt = encodeFormat;
-	decodecCtx_->channel_layout = encodeChLayout;
+	decodecCtx_->sample_fmt = decodeFormat;
+	decodecCtx_->channel_layout = decodeChLayout;
 	decodecCtx_->sample_rate = sampleRate;
 	decodecCtx_->bit_rate = bitRate;
 	decodecCtx_->profile = profile;
-	decodecCtx_->channels = av_get_channel_layout_nb_channels(encodeChLayout);
+	decodecCtx_->channels = av_get_channel_layout_nb_channels(decodeChLayout);
 }
 
 AVFrame* AudioDecode::createFrame(uint64_t channel_layout, AVSampleFormat format, int nb_samples)
@@ -550,7 +552,8 @@ int AudioDecode::audiodecode(AVFrame **dst_frame)
 			return ret;
 		}
 		packet_.size = aac_frame_len;
-		packet_.data = (uint8_t*)av_malloc(packet_.size+1);
+		if (packet_.data)
+			packet_.data = (uint8_t*)av_malloc(2048);
 		//memcpy(packet_.data, aac_data, aac_frame_len);
 		int ret = av_packet_from_data(&packet_, aac_data, packet_.size);
 		if (ret != 0)

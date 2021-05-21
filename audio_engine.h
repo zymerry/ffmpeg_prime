@@ -139,7 +139,7 @@ public:
 
 private:
 	int createdecFrame(uint64_t channel_layout, AVSampleFormat format, int nb_samples);
-	void audio_set_decodec_ctx(AVSampleFormat encodeFormat, uint64_t encodeChLayout,
+	void audio_set_decodec_ctx(AVSampleFormat decodeFormat, uint64_t decodeChLayout,
 		int samples, int bitRate, int profile);
 	string			 decoderName_;
 	AVCodecContext*  decodecCtx_;
