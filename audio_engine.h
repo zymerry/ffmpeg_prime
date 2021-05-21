@@ -15,6 +15,8 @@ extern "C"
 #include "libswscale/swscale.h"
 #include "libswresample/swresample.h"
 #include "libavutil/samplefmt.h"
+#include "libavutil/mem.h"
+#include "libavutil/buffer.h"
 }
 
 using namespace std;

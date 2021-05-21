@@ -50,7 +50,9 @@ int AudioCapture::createFrame(int channel_layout, AVSampleFormat format, int nb_
 		av_strerror(ret, error, 128);
 		av_log(NULL, AV_LOG_ERROR, "open input failure.[%d][%s]\n", AVERROR(ret), error);
 		return -1;
-	}	
+	}
+	printf("channel_layout:%d format:%d nb_samples:%d frame_->line_size:%d",
+		channel_layout, format, nb_samples, frame_->linesize[0]);
 	return 0;
 }
 
@@ -139,6 +141,81 @@ int AudioSample::audioSampleInit()
 	return 0;
 }
 
+AVBufferRef* myav_buffer_alloc(int size)
+{
+	AVBufferRef* ret = NULL;
+	uint8_t* data = NULL;
+
+	data = (uint8_t*)av_malloc(size);
+	if (!data)
+		return NULL;
+
+	ret = av_buffer_create(data, size, av_buffer_default_free, NULL, 0);
+	if (!ret)
+		av_freep(&data);
+
+	return ret;
+}
+int my_get_audio_buffer(AVFrame* frame, int align)
+{
+	int channels;
+	int planar = av_sample_fmt_is_planar((AVSampleFormat)frame->format);
+	int planes;
+	int ret, i;
+
+	if (!frame->channels)
+		frame->channels = av_get_channel_layout_nb_channels(frame->channel_layout);
+
+	channels = frame->channels;
+	planes = planar ? channels : 1;
+
+	//CHECK_CHANNELS_CONSISTENCY(frame);
+	if (!frame->linesize[0]) {
+		ret = av_samples_get_buffer_size(&frame->linesize[0], channels,
+			frame->nb_samples, (AVSampleFormat)frame->format,
+			align);
+		if (ret < 0)
+			return ret;
+	}
+
+	if (planes > AV_NUM_DATA_POINTERS) {
+		frame->extended_data = (uint8_t**)av_mallocz_array(planes,
+			sizeof(*frame->extended_data));
+		frame->extended_buf = (AVBufferRef**)av_mallocz_array((planes - AV_NUM_DATA_POINTERS),
+			sizeof(*frame->extended_buf));
+		if (!frame->extended_data || !frame->extended_buf) {
+			av_freep(&frame->extended_data);
+			av_freep(&frame->extended_buf);
+			return AVERROR(ENOMEM);
+		}
+		frame->nb_extended_buf = planes - AV_NUM_DATA_POINTERS;
+	}
+	else
+		frame->extended_data = frame->data;
+
+	printf("FFMIN(planes, AV_NUM_DATA_POINTERS):%d\n", FFMIN(planes, AV_NUM_DATA_POINTERS));
+	for (i = 0; i < FFMIN(planes, AV_NUM_DATA_POINTERS); i++) {
+		printf("================(frame->linesize[0]:%d\n", frame->linesize[0]);
+		printf("i:%d buf[0]:%p\n", i, frame->buf[i]);
+		//frame->buf[i] = av_buffer_alloc(frame->linesize[0]);
+		frame->buf[i] = myav_buffer_alloc(frame->linesize[0]);
+		if (!frame->buf[i]) {
+			av_frame_unref(frame);
+			return AVERROR(ENOMEM);
+		}
+		frame->extended_data[i] = frame->data[i] = frame->buf[i]->data;
+	}
+	for (i = 0; i < planes - AV_NUM_DATA_POINTERS; i++) {
+		frame->extended_buf[i] = av_buffer_alloc(frame->linesize[0]);
+		if (!frame->extended_buf[i]) {
+			av_frame_unref(frame);
+			return AVERROR(ENOMEM);
+		}
+		frame->extended_data[i + AV_NUM_DATA_POINTERS] = frame->extended_buf[i]->data;
+	}
+	return 0;
+}
+
 int AudioSample::createDstFrame(int channel_layout, AVSampleFormat format, int nb_samples)
 {
 	if (frame_) 
@@ -147,11 +224,19 @@ int AudioSample::createDstFrame(int channel_layout, AVSampleFormat format, int n
 	frame_->channel_layout = channel_layout;
 	frame_->format = format;
 	frame_->nb_samples = nb_samples;
-	int ret = av_frame_get_buffer(frame_, 0);
+	if (frame_->data[0])
+	{
+		av_freep(&frame_->data[0]);
+	}
+
+	int ret = my_get_audio_buffer(frame_, 0);
 	if (ret != 0) {
 		av_log(NULL, AV_LOG_ERROR, "open input failure.[%d][%s]\n", AVERROR(ret));
 		return -1;
 	}
+	frame_->nb_samples = nb_samples;
+	printf("channel_layout:%d format:%d nb_samples:%d frame_->line_size:%d", 
+		channel_layout, format, nb_samples, frame_->linesize[0]);
 	return 0;
 }
 
@@ -174,22 +259,29 @@ int AudioSample::audioSampleCreateData()
 		1024,    //采样个数 4096(字节)/2(采样位数16 bit)/2通道
 		srcFormat_, //采样格式 根据这三个就能算出来需要的总字节, 和 采集的时候 frame->data 算的长度一致
 		0);
-	printf("create sample dst data len = %d\n", dstLen_);
-	printf("create sample src data len = %d\n", srcLen_);
+	printf("samples[%d] dstformaot[%d] dstChLayout_[%d] create sample dst data len = %d\n", 
+		1024, dstFormat_, dstChLayout_, dstLen_);
+	printf("samples[%d] srcformaot[%d] srcChLayout_[%d] create sample src data len = %d\n",
+		1024, srcFormat_, srcChLayout_, srcLen_, srcLen_);
 	return 0;
 }
 
 int AudioSample::audioSampleConvert(AVFrame *srcFrame, AVFrame **dstFrame)
 {
 	int planar = 0;
-	printf(" sdfsdf srcFrame->linesize[0]:%d\n", srcFrame->linesize[0]);
+	
 	planar = av_sample_fmt_is_planar(srcFormat_);
+	printf(" sdfsdf srcFrame->linesize[0]:%d planar:%d\n", srcFrame->linesize[0], planar);
 	if (planar)
 	{
+		printf("srcFrame->linesize[0]:%d\n", srcFrame->linesize[0]);
 		int channels = av_get_channel_layout_nb_channels(srcChLayout_);
-		int plane_len = srcFrame->linesize[0] / channels; // 每层的数据长度
+		int plane_len = srcFrame->linesize[0];             // 每层的数据长度
 		for (int i = 0; i < channels; i++) {               // 将每层数据写给源缓冲区
-			memcpy((void*)(srcData_[0] + plane_len*i), srcFrame->data[i], plane_len);
+			//解码的时候是从fltp->s16
+			//按理论上是以下的方式处理，但存在问题，此处先记录下
+			memcpy((void*)(srcData_[0]+ plane_len*i), srcFrame->data[i], plane_len);
+			//memcpy((void*)(srcData_[0]), srcFrame->data[0], plane_len);
 		}
 	}
 	else
@@ -197,21 +289,21 @@ int AudioSample::audioSampleConvert(AVFrame *srcFrame, AVFrame **dstFrame)
 		memcpy((void*)srcData_[0], srcFrame->data[0], srcFrame->linesize[0]);
 	}
 	int nb_samples = swr_convert(swrCtx_, dstData_, 1024, (const uint8_t **)srcData_, 1024);
-	int dst_linesize = 0;
-	int dst_bufsize = av_samples_get_buffer_size(&dst_linesize, av_get_channel_layout_nb_channels(dstChLayout_),
-		nb_samples, dstFormat_, 1); //重采样成 FLTP 了
+	//int dst_linesize = 0;
+	//int dst_bufsize = av_samples_get_buffer_size(&dst_linesize, av_get_channel_layout_nb_channels(dstChLayout_),
+	//	nb_samples, dstFormat_, 0); 
 	
-	printf("convert dst_bufsize = %d, dst_linesize = %d, nb_samples = %d\n", dst_bufsize, dst_linesize, nb_samples);
+	//printf("convert dst_bufsize = %d, dst_linesize = %d, nb_samples = %d\n", dst_bufsize, dst_linesize, nb_samples);
 	
+	printf("dstChLayout_:%d dstFormat_:%d nb_samples:%d\n", dstChLayout_, dstFormat_, nb_samples);
 	createDstFrame(dstChLayout_, dstFormat_, nb_samples);
-	printf("convert create dst frame[0] size = %d\n", frame_->linesize[0]);
 	planar = av_sample_fmt_is_planar(dstFormat_);
+	printf("planar:[%d]----convert create dst frame[0] size = %d\n", planar, frame_->linesize[0]);
 	if (planar) {
 		int channels = av_get_channel_layout_nb_channels(srcChLayout_);
-		printf("*********** frame_->linesize[0]:%d***************\n", frame_->linesize[0]);
 		int plane_len = frame_->linesize[0]; // 每层的数据长度
 		for (int i = 0; i < channels; i++) {               // 将每层数据写给源缓冲区
-			memcpy(frame_->data[i], dstData_[0]+ plane_len*i, plane_len);
+			memcpy(frame_->data[i], dstData_[0] + plane_len*i, plane_len);
 		}
 	} else {
 		memcpy(frame_->data[0], dstData_[0], frame_->linesize[0]);
@@ -484,6 +576,7 @@ int AudioDecode::createInstream(string filename)
 
 int AudioDecode::audiodecode_()
 {
+	printf("packet_:%d\n", packet_.size);
 	int ret = avcodec_send_packet(decodecCtx_, &packet_);
 	//ret >= 0说明数据设置成功了
 	while (ret >= 0) {

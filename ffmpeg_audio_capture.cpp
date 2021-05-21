@@ -106,6 +106,7 @@ int main() {
 
 	string devName(device_name);
 	AudioCapture* audioCapture = new AudioCapture(devName, libName);
+	printf("AV_SAMPLE_FMT_S16:%d\n", AV_SAMPLE_FMT_S16);
 	int ret = audioCapture->audioInit(AV_CH_LAYOUT_STEREO, AV_SAMPLE_FMT_S16, 1024);
 	if (ret < 0) {
 		printf("init fail.\n");
@@ -131,7 +132,7 @@ int main() {
 		}
 		fwrite(frame->data[0], 1, frame->linesize[0], fd);
 
-		printf("frame linesize size = %d\n", frame->linesize[0]);
+		printf("ssss frame linesize size = %d\n", frame->linesize[0]);
 		audioSample->audioSampleConvert(frame, &resample_frame);
 		//重采样的数据是 planar 模式 AV_SAMPLE_FMT_FLTP
 		fwrite(resample_frame->data[0], 1, resample_frame->linesize[0], fd1);
@@ -164,7 +165,10 @@ int main(int argc, char* argv[])
 	const char* out_file_name = "out_s16.pcm";
 	FILE* out_fd;
 	const string in_file_name = "encode.aac";
+<<<<<<< HEAD
 	//const string in_file_name = "out.aac";
+=======
+>>>>>>> e33772b02285a59e8c91883cc58c2c70744ea991
 	AudioDecode* audio_decode = new AudioDecode("aac", 0);
 	AVFrame* decframe = NULL;
 	AVFrame* resample_frame = NULL;
