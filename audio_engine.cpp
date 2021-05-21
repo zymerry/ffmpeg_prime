@@ -276,12 +276,12 @@ int AudioSample::audioSampleConvert(AVFrame *srcFrame, AVFrame **dstFrame)
 	{
 		printf("srcFrame->linesize[0]:%d\n", srcFrame->linesize[0]);
 		int channels = av_get_channel_layout_nb_channels(srcChLayout_);
-		int plane_len = srcFrame->linesize[0];             // 每层的数据长度
+		//理论上plannar模式下srcFrame->linesize[0]存放的是每个通道的大小，但是次处却是所有通道的总的size
+		int plane_len = srcFrame->linesize[0]/channels;    // 每层的数据长度
 		for (int i = 0; i < channels; i++) {               // 将每层数据写给源缓冲区
 			//解码的时候是从fltp->s16
 			//按理论上是以下的方式处理，但存在问题，此处先记录下
 			memcpy((void*)(srcData_[0]+ plane_len*i), srcFrame->data[i], plane_len);
-			//memcpy((void*)(srcData_[0]), srcFrame->data[0], plane_len);
 		}
 	}
 	else
@@ -301,7 +301,7 @@ int AudioSample::audioSampleConvert(AVFrame *srcFrame, AVFrame **dstFrame)
 	printf("planar:[%d]----convert create dst frame[0] size = %d\n", planar, frame_->linesize[0]);
 	if (planar) {
 		int channels = av_get_channel_layout_nb_channels(srcChLayout_);
-		int plane_len = frame_->linesize[0]; // 每层的数据长度
+		int plane_len = frame_->linesize[0];               // 每层的数据长度
 		for (int i = 0; i < channels; i++) {               // 将每层数据写给源缓冲区
 			memcpy(frame_->data[i], dstData_[0] + plane_len*i, plane_len);
 		}

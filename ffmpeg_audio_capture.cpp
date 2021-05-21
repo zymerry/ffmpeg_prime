@@ -164,11 +164,9 @@ int main(int argc, char* argv[])
 	int ret = 0;
 	const char* out_file_name = "out_s16.pcm";
 	FILE* out_fd;
-	const string in_file_name = "encode.aac";
-<<<<<<< HEAD
-	//const string in_file_name = "out.aac";
-=======
->>>>>>> e33772b02285a59e8c91883cc58c2c70744ea991
+	//const string in_file_name = "encode.aac";
+	const string in_file_name = "out.aac";
+
 	AudioDecode* audio_decode = new AudioDecode("aac", 0);
 	AVFrame* decframe = NULL;
 	AVFrame* resample_frame = NULL;
